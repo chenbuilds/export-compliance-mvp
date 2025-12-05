@@ -1,0 +1,38 @@
+{
+    "version": 2,
+    "name": "export-compliance-assistant",
+    "builds": [
+        {
+            "src": "backend/app.py",
+            "use": "@vercel/python",
+            "config": {
+                "maxLambdaSize": "50mb"
+            }
+        },
+        {
+            "src": "package.json",
+            "use": "@vercel/static-build",
+            "config": {
+                "distDir": "dist"
+            }
+        }
+    ],
+    "routes": [
+        {
+            "src": "/api/(.*)",
+            "dest": "backend/app.py"
+        },
+        {
+            "src": "/(.*)",
+            "dest": "/dist/$1"
+        }
+    ],
+    "env": {
+        "GOOGLE_API_KEY": "@google-api-key",
+        "EMAIL_PROVIDER": "@email-provider",
+        "GMAIL_USER": "@gmail-user",
+        "GMAIL_APP_PASSWORD": "@gmail-app-password",
+        "SENDGRID_API_KEY": "@sendgrid-api-key",
+        "FROM_EMAIL": "@from-email"
+    }
+}
