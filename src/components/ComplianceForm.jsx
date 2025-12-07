@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import Input from './Input';
 import Button from './Button';
 import Card from './Card';
@@ -8,13 +8,17 @@ import DecisionVisualization from './DecisionVisualization';
 import AIAssistant from './AIAssistant';
 import ChatInterface, { ChatToggle } from './ChatInterface';
 import { AuditLog, ReportDownload } from './AuditExport';
+import UFLPAResultCard from './UFLPAResultCard';
+import DPSResultCard from './DPSResultCard';
 import { API_URL } from '../config/api';
 
 const ComplianceForm = () => {
     const [formData, setFormData] = useState({
         eccn: '',
         description: '',
+        supplier: '',
         destination: 'Germany',
+        endUserName: '',
         endUserType: 'Commercial',
         value: '',
         quantity: 1,
@@ -24,6 +28,8 @@ const ComplianceForm = () => {
     });
 
     const [results, setResults] = useState(null);
+    const [dpsResult, setDpsResult] = useState(null);
+    const [uflpaResult, setUflpaResult] = useState(null);
     const [trace, setTrace] = useState(null);
     const [aiSuggestion, setAiSuggestion] = useState(null);
     const [message, setMessage] = useState(null);
@@ -35,6 +41,31 @@ const ComplianceForm = () => {
     const [showChat, setShowChat] = useState(false);
     const [showAuditLog, setShowAuditLog] = useState(false);
     const [showReportDownload, setShowReportDownload] = useState(false);
+    const [countries, setCountries] = useState([]);
+
+    // Fetch countries on mount
+    useEffect(() => {
+        const fetchCountries = async () => {
+            try {
+                const response = await fetch(`${API_URL}/countries`);
+                if (response.ok) {
+                    const data = await response.json();
+                    setCountries(data.countries.map(c => ({ value: c, label: c })));
+                }
+            } catch (error) {
+                console.error("Failed to fetch countries:", error);
+                // Fallback hardcoded list if fetch fails
+                setCountries([
+                    { value: 'Germany', label: 'Germany' },
+                    { value: 'China', label: 'China' },
+                    { value: 'Russia', label: 'Russia' },
+                    { value: 'United Kingdom', label: 'United Kingdom' },
+                    { value: 'Japan', label: 'Japan' }
+                ]);
+            }
+        };
+        fetchCountries();
+    }, []);
 
 
     // Handle form field changes
@@ -58,6 +89,10 @@ const ComplianceForm = () => {
     const handleSubmit = async (e) => {
         e.preventDefault();
         setResults(null);
+        setDpsResult(null);
+        setUflpaResult(null);
+        setTrace(null);
+        setAiSuggestion(null);
         setTrace(null);
         setAiSuggestion(null);
         setMessage(null);
@@ -79,28 +114,55 @@ const ComplianceForm = () => {
         try {
             // Send form data to Flask backend via POST request
             // Ensure port matches backend (5001)
-            const response = await fetch(`${API_URL}/evaluate`, {
+            let complianceData = null;
+            const submitData = formData; // Use formData directly for compliance check
+
+            // Parallel execution: Compliance Check + DPS Screening + UFLPA Screening
+            const compliancePromise = fetch(`${API_URL}/evaluate`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(formData)
+                body: JSON.stringify(submitData)
             });
 
-            if (!response.ok) {
-                throw new Error(`Server error: ${response.status}`);
+            const dpsPromise = formData.endUserName ? fetch(`${API_URL}/screen-dps`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ companyName: formData.endUserName })
+            }) : Promise.resolve(null);
+
+            const uflpaPromise = (formData.supplier || formData.description) ? fetch(`${API_URL}/screen-uflpa`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    supplier: formData.supplier,
+                    commodity: formData.description, // Using description as proxy for commodity
+                    origin: 'China' // Defaulting to China for sensitivity check, in real app would be input
+                })
+            }) : Promise.resolve(null);
+
+            const [complianceRes, dpsRes, uflpaRes] = await Promise.all([compliancePromise, dpsPromise, uflpaPromise]);
+
+            // Handle Compliance Result
+            if (!complianceRes.ok) throw new Error('Compliance check failed');
+            complianceData = await complianceRes.json();
+
+            // Handle DPS Result
+            if (dpsRes && dpsRes.ok) {
+                const dpsData = await dpsRes.json();
+                setDpsResult(dpsData);
             }
 
-            const data = await response.json();
+            // Handle UFLPA Result
+            if (uflpaRes && uflpaRes.ok) {
+                const uflpaData = await uflpaRes.json();
+                setUflpaResult(uflpaData);
+            }
 
-            // Handle response based on backend structure
-            // My backend returns { results: [], ai_suggestion: ... }
-            // The user's prompt suggested { message: ... }
-            // I will handle both cases for robustness.
-
-            if (data.results) setResults(data.results);
-            if (data.trace) setTrace(data.trace);
-            if (data.ai_suggestion) setAiSuggestion(data.ai_suggestion);
-            if (data.message) setMessage(data.message);
-            if (data.error) setError(data.error);
+            setResults(complianceData.results);
+            setTrace(complianceData.trace);
+            if (complianceData.ai_suggestion) setAiSuggestion(complianceData.ai_suggestion);
+            if (complianceData.message) setMessage(complianceData.message);
+            if (complianceData.error) setError(complianceData.error);
 
         } catch (error) {
             setError("Something went wrong. Please ensure the backend is running on port 5001.");
@@ -141,17 +203,9 @@ const ComplianceForm = () => {
                                 value={formData.destination}
                                 onChange={handleChange}
                                 error={formErrors.destination}
-                                options={[
+                                options={countries.length > 0 ? countries : [
                                     { value: 'Germany', label: 'Germany' },
-                                    { value: 'United Kingdom', label: 'United Kingdom' },
-                                    { value: 'China', label: 'China' },
-                                    { value: 'Iran', label: 'Iran' },
-                                    { value: 'North Korea', label: 'North Korea' },
-                                    { value: 'Colombia', label: 'Colombia' },
-                                    { value: 'Canada', label: 'Canada' },
-                                    { value: 'Australia', label: 'Australia' },
-                                    { value: 'France', label: 'France' },
-                                    { value: 'Japan', label: 'Japan' },
+                                    { value: 'China', label: 'China' }
                                 ]}
                             />
 
@@ -191,21 +245,31 @@ const ComplianceForm = () => {
                                 onChange={handleChange}
                             />
 
-                            {/* End User Type */}
-                            <Input
-                                id="endUserType"
-                                label="End User Type"
-                                type="select"
-                                value={formData.endUserType}
-                                onChange={handleChange}
-                                options={[
-                                    { value: 'Commercial', label: 'Commercial' },
-                                    { value: 'Government', label: 'Government' },
-                                    { value: 'Military', label: 'Military' },
-                                    { value: 'NGO', label: 'NGO' },
-                                    { value: 'Individual', label: 'Individual' },
-                                ]}
-                            />
+                            {/* End User Info */}
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                                <Input
+                                    id="endUserName"
+                                    label="End User / Company Name"
+                                    placeholder="e.g. Acme Corp"
+                                    value={formData.endUserName}
+                                    onChange={handleChange}
+                                    tooltip="Name of the party receiving the items. Used for denied party screening."
+                                />
+                                <Input
+                                    id="endUserType"
+                                    label="End User Type"
+                                    type="select"
+                                    value={formData.endUserType}
+                                    onChange={handleChange}
+                                    options={[
+                                        { value: 'Commercial', label: 'Commercial' },
+                                        { value: 'Government', label: 'Government' },
+                                        { value: 'Individual', label: 'Individual' },
+                                        { value: 'Military', label: 'Military' },
+                                        { value: 'Academic', label: 'Academic/Research' }
+                                    ]}
+                                />
+                            </div>
                         </div>
 
                         {/* Re-export Toggle */}
@@ -223,11 +287,21 @@ const ComplianceForm = () => {
                         {/* Product Description */}
                         <Input
                             id="description"
-                            label="Product Description"
+                            label="Product Description / Commodity"
                             type="textarea"
                             placeholder="Briefly describe the item and its end use..."
                             value={formData.description}
                             onChange={handleChange}
+                        />
+
+                        {/* Supplier */}
+                        <Input
+                            id="supplier"
+                            label="Supplier / Manufacturer"
+                            placeholder="e.g. Xinjiang Cotton Co."
+                            value={formData.supplier}
+                            onChange={handleChange}
+                            tooltip="Name of the entity supplying the goods. Critical for UFLPA screening."
                         />
 
                         <div className="mt-4 text-center" style={{ marginTop: '1.5rem', textAlign: 'center' }}>
@@ -239,9 +313,23 @@ const ComplianceForm = () => {
                 </Card>
 
                 {/* Right Column: Results */}
-                {(results || trace || message || error) && (
+                {(results || dpsResult || error) && (
                     <div id="results" style={{ marginBottom: '2rem' }}>
-                        <h3 style={{ fontSize: '1.3rem', fontWeight: 'bold', marginBottom: '1rem' }}>Compliance Results</h3>
+
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem' }}>
+                            <h3 style={{ fontSize: '1.3rem', fontWeight: 'bold', margin: 0 }}>Compliance Results</h3>
+                            <Button
+                                variant="outline"
+                                icon={FileText}
+                                size="sm"
+                                onClick={() => setShowAuditLog(true)}
+                            >
+                                Audit Log
+                            </Button>
+                        </div>
+
+                        <DPSResultCard result={dpsResult} />
+                        <UFLPAResultCard result={uflpaResult} />
 
                         {error && (
                             <Card className="error-card" style={{ borderLeft: '4px solid var(--error-color)' }}>

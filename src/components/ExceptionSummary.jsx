@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import {
     ChevronDown, ChevronUp, FileText, Globe, Lock, Shield, Clock,
     Settings, Cpu, Building, Briefcase, Plane, CheckCircle, AlertCircle,
-    Info, ExternalLink, Filter
+    Info, ExternalLink, Filter, Map
 } from 'lucide-react';
 import Button from './Button';
 
@@ -178,6 +178,7 @@ const ExceptionCard = ({ result, isExpanded, onToggle }) => {
 const ExceptionSummary = ({ results }) => {
     const [expandedCards, setExpandedCards] = useState({});
     const [filter, setFilter] = useState('all');
+    const [showFullMap, setShowFullMap] = useState(false);
 
     if (!results || results.length === 0) return null;
 
@@ -269,6 +270,16 @@ const ExceptionSummary = ({ results }) => {
                         >
                             Collapse All
                         </button>
+                        <button
+                            onClick={() => setShowFullMap(true)}
+                            style={{
+                                fontSize: '0.75rem', padding: '4px 10px', borderRadius: '6px',
+                                border: '1px solid #3b82f6', backgroundColor: '#eff6ff', color: '#1d4ed8', cursor: 'pointer',
+                                display: 'flex', alignItems: 'center', gap: '4px'
+                            }}
+                        >
+                            <Map size={12} /> View Full Map
+                        </button>
                     </div>
                 </div>
 
@@ -305,6 +316,41 @@ const ExceptionSummary = ({ results }) => {
                     />
                 ))}
             </div>
+
+            {/* Full Map Modal */}
+            {showFullMap && (
+                <div style={{
+                    position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+                    backgroundColor: 'rgba(0,0,0,0.5)', zIndex: 1000,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center'
+                }} onClick={() => setShowFullMap(false)}>
+                    <div style={{
+                        backgroundColor: 'white', padding: '24px', borderRadius: '16px',
+                        width: '90%', maxWidth: '600px', maxHeight: '80vh', overflowY: 'auto'
+                    }} onClick={e => e.stopPropagation()}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '16px' }}>
+                            <h3 style={{ margin: 0 }}>Full Exception Map</h3>
+                            <button onClick={() => setShowFullMap(false)} style={{ border: 'none', background: 'none', cursor: 'pointer', fontSize: '1.2rem' }}>×</button>
+                        </div>
+                        <p style={{ fontSize: '0.9rem', color: '#64748b' }}>Quick reference for exception codes found in these results.</p>
+
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: '12px', marginTop: '16px' }}>
+                            {results.filter(r => r.type === 'EXCEPTION').map((r, i) => (
+                                <div key={i} style={{
+                                    padding: '12px', border: '1px solid #e2e8f0', borderRadius: '8px',
+                                    textAlign: 'center', backgroundColor: '#f8fafc'
+                                }}>
+                                    <span style={{ display: 'block', fontWeight: 'bold', color: '#1e293b' }}>{r.code}</span>
+                                    <span style={{ fontSize: '0.8rem', color: '#475569' }}>{r.title}</span>
+                                </div>
+                            ))}
+                            {results.filter(r => r.type === 'EXCEPTION').length === 0 && (
+                                <div style={{ gridColumn: '1 / -1', textAlign: 'center', color: '#64748b' }}>No eligible exceptions found.</div>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 };

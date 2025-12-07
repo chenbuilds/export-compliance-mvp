@@ -3,17 +3,31 @@
 Export Compliance Logic Engine
 """
 
-# Country Groups (Simplified from EAR Supplement No. 1 to Part 740)
-COUNTRY_GROUPS = {
-    'A1': ['Australia', 'Austria', 'Belgium', 'Canada', 'Denmark', 'Finland', 'France', 
-           'Germany', 'Greece', 'Ireland', 'Italy', 'Japan', 'Luxembourg', 'Netherlands',
-           'New Zealand', 'Norway', 'Portugal', 'Spain', 'Sweden', 'Switzerland', 'United Kingdom'],
-    'B': ['Argentina', 'Brazil', 'Chile', 'Colombia', 'Hong Kong', 'India', 'Israel', 
-          'Malaysia', 'Mexico', 'Philippines', 'Singapore', 'South Africa', 'South Korea',
-          'Taiwan', 'Thailand', 'Turkey', 'United Arab Emirates', 'Vietnam'],
-    'D1': ['China', 'Russia', 'Belarus', 'Venezuela'],  # NS Column concerns
-    'E1': ['Cuba', 'Iran', 'North Korea', 'Syria'],  # Embargoed
-}
+import json
+import os
+
+# Load Country Groups from JSON
+def load_country_groups():
+    file_path = os.path.join(os.path.dirname(__file__), 'data', 'country_groups.json')
+    try:
+        with open(file_path, 'r') as f:
+            return json.load(f)
+    except FileNotFoundError:
+        print(f"Error: {file_path} not found. Using empty country groups.")
+        return {}
+
+FULL_COUNTRY_DATA = load_country_groups()
+
+def get_country_groups(country_name):
+    """Retrieve the BIS groups (A, B, D, E) for a given country."""
+    country_data = FULL_COUNTRY_DATA.get(country_name)
+    if country_data:
+        return country_data.get('groups', [])
+    return []
+
+# Helper to provide list of all available countries for frontend
+def get_all_countries():
+    return sorted(list(FULL_COUNTRY_DATA.keys()))
 
 # Expanded ECCN Database (40 Common ECCNs)
 ECCN_DB = {
@@ -129,7 +143,8 @@ ECCN_DB = {
 }
 
 # Restricted Destinations (Embargoed/Sanctioned)
-RESTRICTED_DESTINATIONS = COUNTRY_GROUPS['E1']
+# Restricted Destinations (Embargoed/Sanctioned)
+RESTRICTED_DESTINATIONS = [c for c, data in FULL_COUNTRY_DATA.items() if 'E:1' in data.get('groups', [])]
 
 # LVS Thresholds by Country Group
 LVS_THRESHOLD_A1 = 5000
@@ -273,18 +288,12 @@ def get_lvs_threshold(destination, eccn_info):
     else:
         base_limit = LVS_THRESHOLD_DEFAULT
     
-    if destination in COUNTRY_GROUPS['A1']:
+    country_groups = get_country_groups(destination)
+    if 'A:1' in country_groups:
         return min(base_limit, LVS_THRESHOLD_A1)
-    elif destination in COUNTRY_GROUPS['B']:
+    elif 'B' in country_groups:
         return min(base_limit, LVS_THRESHOLD_B)
     return base_limit
-
-def get_country_group(destination):
-    """Determine country group for a destination."""
-    for group, countries in COUNTRY_GROUPS.items():
-        if destination in countries:
-            return group
-    return 'OTHER'
 
 def validate_eccn(eccn):
     """
@@ -325,16 +334,16 @@ def evaluate_exceptions(eccn, eccn_info, value, destination, end_user_type, is_g
     results = []
     trace_steps = []
     
-    country_group = get_country_group(destination)
+    country_groups = get_country_groups(destination)
     lvs_threshold = get_lvs_threshold(destination, eccn_info)
     available_exceptions = eccn_info.get('exceptions', []) if eccn_info else []
     
-    trace_steps.append(f"Evaluating exceptions for Value: ${value}, End User: {end_user_type}, Country Group: {country_group}")
+    trace_steps.append(f"Evaluating exceptions for Value: ${value}, End User: {end_user_type}, Country Groups: {country_groups}")
 
     # Proactive Tip: Borderline Value Check
     if eccn_info and 'LVS' in available_exceptions:
         if lvs_threshold < value <= lvs_threshold * 1.2:
-             trace_steps.append(f"PROACTIVE TIP: Value ${value} is close to LVS limit (${lvs_threshold} for {country_group}).")
+             trace_steps.append(f"PROACTIVE TIP: Value ${value} is close to LVS limit (${lvs_threshold}).")
              results.append({
                 'type': 'TIP',
                 'code': 'TIP',
@@ -346,7 +355,7 @@ def evaluate_exceptions(eccn, eccn_info, value, destination, end_user_type, is_g
 
     # LVS - Shipments of Limited Value
     if eccn_info and 'LVS' in available_exceptions:
-        if 0 < value <= lvs_threshold and country_group not in ['D1', 'E1']:
+        if 0 < value <= lvs_threshold and not any(g in ['D:1', 'E:1'] for g in country_groups):
              trace_steps.append(f"LVS Applicable: Value ${value} <= Threshold ${lvs_threshold}.")
              results.append({
                 'type': 'EXCEPTION',
@@ -361,7 +370,7 @@ def evaluate_exceptions(eccn, eccn_info, value, destination, end_user_type, is_g
 
     # TMP - Temporary Exports
     if eccn_info and 'TMP' in available_exceptions and is_temporary:
-        if country_group in ['A1', 'B']:
+        if any(g in ['A:1', 'B'] for g in country_groups):
             trace_steps.append("TMP Applicable: Temporary export/re-export eligible.")
             results.append({
                 'type': 'EXCEPTION',
@@ -374,7 +383,7 @@ def evaluate_exceptions(eccn, eccn_info, value, destination, end_user_type, is_g
 
     # GBS - Group B Shipments
     if eccn_info and 'GBS' in available_exceptions:
-        if country_group == 'B' and value > 0:
+        if 'B' in country_groups and value > 0:
             trace_steps.append("GBS Applicable: Group B country shipment eligible.")
             results.append({
                 'type': 'EXCEPTION',
@@ -387,7 +396,7 @@ def evaluate_exceptions(eccn, eccn_info, value, destination, end_user_type, is_g
 
     # ENC - Encryption Exception
     if eccn_info and 'ENC' in available_exceptions:
-        if country_group in ['A1', 'B']:
+        if any(g in ['A:1', 'B'] for g in country_groups):
             trace_steps.append("ENC Applicable: Encryption exception eligible.")
             results.append({
                 'type': 'EXCEPTION',
@@ -400,7 +409,7 @@ def evaluate_exceptions(eccn, eccn_info, value, destination, end_user_type, is_g
 
     # GOV - Government End-Users
     if end_user_type == 'Government' or is_gov_contract:
-        if country_group in ['A1', 'B']:
+        if any(g in ['A:1', 'B'] for g in country_groups):
             trace_steps.append("GOV Applicable: Government End User detected.")
             results.append({
                 'type': 'EXCEPTION',
@@ -413,7 +422,7 @@ def evaluate_exceptions(eccn, eccn_info, value, destination, end_user_type, is_g
 
     # STA - Strategic Trade Authorization
     if eccn_info and 'STA' in available_exceptions:
-        if country_group == 'A1':
+        if 'A:1' in country_groups:
             trace_steps.append("STA Applicable: Strategic Trade Authorization eligible destination.")
             results.append({
                 'type': 'EXCEPTION',
@@ -426,7 +435,7 @@ def evaluate_exceptions(eccn, eccn_info, value, destination, end_user_type, is_g
     
     # TSR - Technology and Software Restriction
     if eccn_info and 'TSR' in available_exceptions:
-        if country_group in ['A1', 'B']:
+        if any(g in ['A:1', 'B'] for g in country_groups):
             trace_steps.append("TSR Applicable: Technology/Software for operation/maintenance eligible.")
             results.append({
                 'type': 'EXCEPTION',
@@ -439,7 +448,7 @@ def evaluate_exceptions(eccn, eccn_info, value, destination, end_user_type, is_g
     
     # RPL - Servicing and Replacement Parts
     if eccn_info and 'RPL' in available_exceptions:
-        if country_group in ['A1', 'B']:
+        if any(g in ['A:1', 'B'] for g in country_groups):
             trace_steps.append("RPL Applicable: Replacement parts exception eligible.")
             results.append({
                 'type': 'EXCEPTION',
@@ -452,7 +461,7 @@ def evaluate_exceptions(eccn, eccn_info, value, destination, end_user_type, is_g
     
     # APP - Computers (Additional Permissive Reexports)
     if eccn_info and 'APP' in available_exceptions:
-        if country_group in ['A1', 'B']:
+        if any(g in ['A:1', 'B'] for g in country_groups):
             trace_steps.append("APP Applicable: Computer/APP parameters met.")
             results.append({
                 'type': 'EXCEPTION',
@@ -465,7 +474,7 @@ def evaluate_exceptions(eccn, eccn_info, value, destination, end_user_type, is_g
     
     # CIV - Civil End-Users
     if eccn_info and 'CIV' in available_exceptions:
-        if country_group in ['A1', 'B'] and end_user_type != 'Military':
+        if any(g in ['A:1', 'B'] for g in country_groups) and end_user_type != 'Military':
             trace_steps.append("CIV Applicable: Civil end-user exception eligible.")
             results.append({
                 'type': 'EXCEPTION',

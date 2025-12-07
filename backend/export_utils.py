@@ -20,7 +20,14 @@ def generate_report_data(evaluation_data, results, trace, ai_suggestion):
             'destination': evaluation_data.get('destination', 'N/A'),
             'value': evaluation_data.get('value', 'N/A'),
             'end_user_type': evaluation_data.get('endUserType', 'N/A'),
+            'end_user_type': evaluation_data.get('endUserType', 'N/A'),
+            'end_user_name': evaluation_data.get('endUserName', 'N/A'),
+            'supplier': evaluation_data.get('supplier', 'N/A'),
             'description': evaluation_data.get('description', 'N/A')
+        },
+        'screening_results': {
+            'dps': evaluation_data.get('dps_result'),
+            'uflpa': evaluation_data.get('uflpa_result')
         },
         'decision_trace': trace,
         'results': results,
@@ -47,6 +54,8 @@ def format_report_as_text(report_data):
     lines.append(f"Destination: {inp['destination']}")
     lines.append(f"Value: ${inp['value']}")
     lines.append(f"End User Type: {inp['end_user_type']}")
+    lines.append(f"End User Name: {inp.get('end_user_name', 'N/A')}")
+    lines.append(f"Supplier: {inp.get('supplier', 'N/A')}")
     lines.append("")
     
     lines.append("-" * 40)
@@ -118,6 +127,9 @@ def generate_pdf_report(report_data):
         ['Destination Country', inp['destination']],
         ['Declared Value', f"${inp['value']}"],
         ['End User Type', inp['end_user_type']],
+        ['End User Type', inp['end_user_type']],
+        ['End User Name', inp.get('end_user_name', 'N/A')],
+        ['Supplier', inp.get('supplier', 'N/A')],
         ['Description', inp.get('description', 'N/A')[:50] + '...' if len(inp.get('description', '')) > 50 else inp.get('description', 'N/A')]
     ]
     table = Table(data, colWidths=[1.8*inch, 4.5*inch])
@@ -143,7 +155,32 @@ def generate_pdf_report(report_data):
         # Escape HTML special chars
         safe_step = step.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
         elements.append(Paragraph(f"<b>Step {i}:</b> {safe_step}", trace_style))
+    elements.append(Paragraph(f"<b>Step {i}:</b> {safe_step}", trace_style))
     elements.append(Spacer(1, 0.15*inch))
+    
+    # Section 2.5: Screening Results (New)
+    if report_data.get('screening_results'):
+        screening = report_data['screening_results']
+        if screening.get('dps') or screening.get('uflpa'):
+            elements.append(Paragraph("2.5 Screening Checks (DPS & UFLPA)", heading_style))
+            
+            # DPS
+            dps = screening.get('dps')
+            if dps:
+                dps_color = colors.red if dps.get('status') == 'BLOCKED' else (colors.orange if dps.get('status') == 'POTENTIAL_MATCH' else colors.green)
+                dps_text = f"<b>Denied Party Screening:</b> <font color='{dps_color.hexval()[2:]}'>{dps.get('status', 'N/A')}</font>"
+                elements.append(Paragraph(dps_text, body_style))
+                if dps.get('match_name'):
+                     elements.append(Paragraph(f"Match: {dps.get('match_name')} ({dps.get('list', '')})", trace_style))
+
+            # UFLPA
+            uflpa = screening.get('uflpa')
+            if uflpa:
+                uflpa_color = colors.red if uflpa.get('risk_level') == 'HIGH' else (colors.orange if uflpa.get('risk_level') == 'MEDIUM' else colors.green)
+                uflpa_text = f"<b>Forced Labor Screening:</b> <font color='{uflpa_color.hexval()[2:]}'>{uflpa.get('risk_level', 'N/A')}</font>"
+                elements.append(Paragraph(uflpa_text, body_style))
+                 
+            elements.append(Spacer(1, 0.15*inch))
     
     # Section 3: Compliance Results
     elements.append(Paragraph("3. Compliance Results", heading_style))

@@ -9,11 +9,13 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 from dotenv import load_dotenv
 import google.generativeai as genai
-from compliance_logic import evaluate_export
+from compliance_logic import evaluate_export, get_all_countries
 from chat_agent import (
     get_or_create_conversation, add_message, update_context,
     build_chat_prompt, log_audit_event, get_audit_log
 )
+from dps_service import screen_party
+from uflpa_service import screen_uflpa
 from export_utils import generate_report_data, format_report_as_text, format_report_as_json
 
 # Load environment variables
@@ -31,6 +33,11 @@ if GOOGLE_API_KEY:
 else:
     model = None
     print("WARNING: No GOOGLE_API_KEY found. AI features disabled.")
+
+@app.route('/countries', methods=['GET'])
+def get_countries():
+    """Return list of all available countries."""
+    return jsonify({"countries": get_all_countries()})
 
 @app.route('/evaluate', methods=['POST'])
 def evaluate():
@@ -163,6 +170,43 @@ def get_audit():
     limit = request.args.get('limit', 50, type=int)
     return jsonify({"audit_log": get_audit_log(limit)})
 
+
+@app.route('/screen-dps', methods=['POST'])
+def screen_dps():
+    """Screen a party against denied party lists."""
+    data = request.json
+    company_name = data.get('companyName', '')
+    
+    result = screen_party(company_name)
+    
+    # Log this screening event
+    log_audit_event('DPS_SCREEN', {
+        'company': company_name,
+        'result': result['status'],
+        'details': result
+    })
+    
+    return jsonify(result)
+
+@app.route('/screen-uflpa', methods=['POST'])
+def screen_uflpa_endpoint():
+    """Screen for UFLPA forced labor risks."""
+    data = request.json
+    supplier = data.get('supplier', '')
+    commodity = data.get('commodity', '') # e.g., Cotton, Solar
+    origin = data.get('origin', '') # Country of Origin
+    
+    result = screen_uflpa(supplier, commodity, origin)
+    
+    # Log this screening event
+    log_audit_event('UFLPA_SCREEN', {
+        'supplier': supplier,
+        'risk': result['risk_level'],
+        'details': result
+    })
+    
+    return jsonify(result)
+
 @app.route('/email-status', methods=['GET'])
 def email_status():
     """Check email service configuration status."""
@@ -186,9 +230,27 @@ def send_email():
     destination = data.get('destination', '')
     value = data.get('value', 0)
     end_user_type = data.get('endUserType', 'Commercial')
+    end_user_name = data.get('endUserName', '')
+    supplier = data.get('supplier', '')
+    description = data.get('description', '')
     
     # Evaluate compliance
     results, trace = evaluate_export(data)
+    
+    # Run screenings again for the report (ensure data is fresh)
+    # 1. DPS
+    dps_result = None
+    if end_user_name:
+        dps_result = screen_party(end_user_name)
+    
+    # 2. UFLPA
+    uflpa_result = None
+    if supplier or description:
+        uflpa_result = screen_uflpa(supplier, description, 'China') # Simplified origin for report context
+        
+    # Update data object for report generation context
+    data['dps_result'] = dps_result
+    data['uflpa_result'] = uflpa_result
     
     # Get AI suggestion
     ai_suggestion = ""
