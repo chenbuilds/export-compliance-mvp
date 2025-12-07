@@ -8,6 +8,7 @@ import DecisionVisualization from './DecisionVisualization';
 import AIAssistant from './AIAssistant';
 import ChatInterface, { ChatToggle } from './ChatInterface';
 import { AuditLog, ReportDownload } from './AuditExport';
+import { API_URL } from '../config/api';
 
 const ComplianceForm = () => {
     const [formData, setFormData] = useState({
@@ -78,7 +79,7 @@ const ComplianceForm = () => {
         try {
             // Send form data to Flask backend via POST request
             // Ensure port matches backend (5001)
-            const response = await fetch('http://localhost:5001/evaluate', {
+            const response = await fetch(`${API_URL}/evaluate`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(formData)

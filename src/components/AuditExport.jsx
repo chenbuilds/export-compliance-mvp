@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { FileText, Download, History, X, Clock, CheckCircle, AlertTriangle } from 'lucide-react';
 import Card from './Card';
 import Button from './Button';
+import { API_URL } from '../config/api';
 
 /**
  * AuditLog - Displays the audit trail of all compliance checks
@@ -16,7 +17,7 @@ const AuditLog = ({ onClose }) => {
 
     const fetchAuditLog = async () => {
         try {
-            const response = await fetch('http://localhost:5001/audit?limit=20');
+            const response = await fetch(`${API_URL}/audit?limit=20`);
             const data = await response.json();
             setLogs(data.audit_log || []);
         } catch (error) {
@@ -114,7 +115,7 @@ const ReportDownload = ({ formData, onClose }) => {
     const generateReport = async (format) => {
         setIsGenerating(true);
         try {
-            const response = await fetch('http://localhost:5001/report', {
+            const response = await fetch(`${API_URL}/report`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ ...formData, format })

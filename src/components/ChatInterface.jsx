@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Send, Bot, User, X, MessageCircle, Loader2, Shield, Lock, FileText, CheckCircle, ChevronDown, ChevronUp, Sparkles } from 'lucide-react';
+import { API_URL } from '../config/api';
 
 /**
  * ChatInterface - Enhanced ChatGPT-like multi-turn conversation component
@@ -39,7 +40,7 @@ const ChatInterface = ({ formContext, onClose }) => {
         setIsLoading(true);
 
         try {
-            const response = await fetch('http://localhost:5001/chat', {
+            const response = await fetch(`${API_URL}/chat`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
