@@ -165,7 +165,8 @@ const ComplianceForm = () => {
             if (complianceData.error) setError(complianceData.error);
 
         } catch (error) {
-            setError("Something went wrong. Please ensure the backend is running on port 5001.");
+            console.error("Compliance Check Error:", error);
+            setError(`Connection Error: ${error.message}. Check console for details.`);
         } finally {
             setIsLoading(false);
         }
