@@ -11,33 +11,29 @@ import { AuditLog, ReportDownload } from './AuditExport';
 import UFLPAResultCard from './UFLPAResultCard';
 import DPSResultCard from './DPSResultCard';
 import { API_URL } from '../config/api';
+// Import Agent Client
+import { runShipmentEvaluation, mapAgentToLegacy } from '../api/agentClient';
 
 const ComplianceForm = () => {
+    const [runLaborScreening, setRunLaborScreening] = useState(false);
+    const [isLoading, setIsLoading] = useState(false);
     const [formData, setFormData] = useState({
         eccn: '',
-        description: '',
-        supplier: '',
-        destination: 'Germany',
-        endUserName: '',
-        endUserType: 'Commercial',
+        destination: '',
         value: '',
-        quantity: 1,
-        currency: 'USD',
-        reExport: false,
-        isGovernmentContract: false
+        endUserType: 'Commercial',
+        endUserName: '',
+        supplier: '',
+        description: ''
     });
-
     const [results, setResults] = useState(null);
     const [dpsResult, setDpsResult] = useState(null);
     const [uflpaResult, setUflpaResult] = useState(null);
     const [trace, setTrace] = useState(null);
     const [aiSuggestion, setAiSuggestion] = useState(null);
-    const [message, setMessage] = useState(null);
     const [error, setError] = useState(null);
-    const [isLoading, setIsLoading] = useState(false);
+    const [message, setMessage] = useState(null);
     const [formErrors, setFormErrors] = useState({});
-
-    // Modal states
     const [showChat, setShowChat] = useState(false);
     const [showAuditLog, setShowAuditLog] = useState(false);
     const [showReportDownload, setShowReportDownload] = useState(false);
@@ -52,26 +48,23 @@ const ComplianceForm = () => {
                     const data = await response.json();
                     setCountries(data.countries.map(c => ({ value: c, label: c })));
                 }
-            } catch (error) {
-                console.error("Failed to fetch countries:", error);
-                // Fallback hardcoded list if fetch fails
+            } catch (err) {
+                console.error("Failed to fetch countries:", err);
+                // Fallback to basic list if API fails
                 setCountries([
-                    { value: 'Germany', label: 'Germany' },
                     { value: 'China', label: 'China' },
                     { value: 'Russia', label: 'Russia' },
                     { value: 'United Kingdom', label: 'United Kingdom' },
-                    { value: 'Japan', label: 'Japan' }
+                    { value: 'Canada', label: 'Canada' }
                 ]);
             }
         };
         fetchCountries();
     }, []);
 
-
     // Handle form field changes
     const handleChange = (e) => {
         const { id, name, value, type, checked } = e.target;
-        // Handle potentially different event targets (Input component passes id/name correctly)
         const fieldName = id || name;
 
         setFormData(prev => ({
@@ -79,7 +72,6 @@ const ComplianceForm = () => {
             [fieldName]: type === 'checkbox' ? checked : value
         }));
 
-        // Clear error for this field
         if (formErrors[fieldName]) {
             setFormErrors(prev => ({ ...prev, [fieldName]: null }));
         }
@@ -93,16 +85,18 @@ const ComplianceForm = () => {
         setUflpaResult(null);
         setTrace(null);
         setAiSuggestion(null);
-        setTrace(null);
-        setAiSuggestion(null);
         setMessage(null);
         setError(null);
 
-        // Simple form validation
         const errors = {};
         if (!formData.eccn) errors.eccn = "ECCN is required";
         if (!formData.value) errors.value = "Value is required";
         if (!formData.destination) errors.destination = "Destination is required";
+
+        if (runLaborScreening) {
+            if (!formData.supplier) errors.supplier = "Supplier is required for screening";
+            if (!formData.description) errors.description = "Commodity description required";
+        }
 
         if (Object.keys(errors).length > 0) {
             setFormErrors(errors);
@@ -112,61 +106,36 @@ const ComplianceForm = () => {
         setIsLoading(true);
 
         try {
-            // Send form data to Flask backend via POST request
-            // Ensure port matches backend (5001)
-            let complianceData = null;
-            const submitData = formData; // Use formData directly for compliance check
-
-            // Parallel execution: Compliance Check + DPS Screening + UFLPA Screening
-            const compliancePromise = fetch(`${API_URL}/evaluate`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(submitData)
+            // Updated to use the new Agent Orchestrator
+            const agentResponse = await runShipmentEvaluation({
+                ...formData,
+                runLaborScreening
             });
 
-            const dpsPromise = formData.endUserName ? fetch(`${API_URL}/screen-dps`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ companyName: formData.endUserName })
-            }) : Promise.resolve(null);
+            // Map the unifiedAgentResponse to the legacy state format expected by UI components
+            const legacyData = mapAgentToLegacy(agentResponse);
 
-            const uflpaPromise = (formData.supplier || formData.description) ? fetch(`${API_URL}/screen-uflpa`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    supplier: formData.supplier,
-                    commodity: formData.description, // Using description as proxy for commodity
-                    origin: 'China' // Defaulting to China for sensitivity check, in real app would be input
-                })
-            }) : Promise.resolve(null);
-
-            const [complianceRes, dpsRes, uflpaRes] = await Promise.all([compliancePromise, dpsPromise, uflpaPromise]);
-
-            // Handle Compliance Result
-            if (!complianceRes.ok) throw new Error('Compliance check failed');
-            complianceData = await complianceRes.json();
-
-            // Handle DPS Result
-            if (dpsRes && dpsRes.ok) {
-                const dpsData = await dpsRes.json();
-                setDpsResult(dpsData);
+            if (legacyData.license_results) {
+                setResults(legacyData.license_results.results);
+                setTrace(legacyData.license_results.trace);
             }
 
-            // Handle UFLPA Result
-            if (uflpaRes && uflpaRes.ok) {
-                const uflpaData = await uflpaRes.json();
-                setUflpaResult(uflpaData);
+            // Only set UFLPA if it was requested/returned (Agent might run it automatically if high risk, but we respect UI toggle)
+            if (legacyData.uflpa_results) {
+                setUflpaResult(legacyData.uflpa_results);
             }
 
-            setResults(complianceData.results);
-            setTrace(complianceData.trace);
-            if (complianceData.ai_suggestion) setAiSuggestion(complianceData.ai_suggestion);
-            if (complianceData.message) setMessage(complianceData.message);
-            if (complianceData.error) setError(complianceData.error);
+            if (legacyData.dps_results) {
+                setDpsResult(legacyData.dps_results);
+            }
+
+            if (legacyData.ai_insight) {
+                setAiSuggestion(legacyData.ai_insight);
+            }
 
         } catch (error) {
             console.error("Compliance Check Error:", error);
-            setError(`Connection Error: ${error.message}. Check console for details.`);
+            setError(`Agent Error: ${error.message}`);
         } finally {
             setIsLoading(false);
         }
@@ -183,78 +152,42 @@ const ComplianceForm = () => {
                 {/* Left Column: Form */}
                 <Card title="Export Details">
                     <form onSubmit={handleSubmit}>
-                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: '1rem' }}>
-                            {/* ECCN / USML Category */}
-                            <Input
-                                id="eccn"
-                                label="ECCN / USML Category"
-                                placeholder="e.g. 1A995"
-                                value={formData.eccn}
-                                onChange={handleChange}
-                                required
-                                tooltip="Export Control Classification Number or USML Category."
-                                error={formErrors.eccn}
-                            />
+                        {/* Section 1: Shipment / License */}
+                        <div style={{ marginBottom: '1.5rem' }}>
+                            <h4 style={{ color: '#64748b', fontSize: '0.9rem', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '1rem', borderBottom: '1px solid #e2e8f0', paddingBottom: '0.5rem' }}>
+                                Shipment & License
+                            </h4>
 
-                            {/* Destination */}
-                            <Input
-                                id="destination"
-                                label="Destination Country"
-                                type="select"
-                                value={formData.destination}
-                                onChange={handleChange}
-                                error={formErrors.destination}
-                                options={countries.length > 0 ? countries : [
-                                    { value: 'Germany', label: 'Germany' },
-                                    { value: 'China', label: 'China' }
-                                ]}
-                            />
+                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem' }}>
+                                <Input
+                                    id="eccn"
+                                    label="ECCN / USML"
+                                    placeholder="e.g. 1A995"
+                                    value={formData.eccn}
+                                    onChange={handleChange}
+                                    required
+                                    error={formErrors.eccn}
+                                />
+                                <Input
+                                    id="destination"
+                                    label="Destination"
+                                    type="select"
+                                    value={formData.destination}
+                                    onChange={handleChange}
+                                    error={formErrors.destination}
+                                    options={countries}
+                                />
+                            </div>
 
-                            {/* Value and Currency */}
-                            <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '1rem' }}>
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginTop: '1rem' }}>
                                 <Input
                                     id="value"
-                                    label="Declared Value"
+                                    label="Value (USD)"
                                     type="number"
                                     placeholder="0.00"
                                     value={formData.value}
                                     onChange={handleChange}
-                                    tooltip="Total monetary value of the goods affecting license exceptions."
                                     error={formErrors.value}
-                                />
-                                <Input
-                                    id="currency"
-                                    label="Currency"
-                                    type="select"
-                                    value={formData.currency || 'USD'}
-                                    onChange={handleChange}
-                                    options={[
-                                        { value: 'USD', label: 'USD' },
-                                        { value: 'EUR', label: 'EUR' },
-                                        { value: 'GBP', label: 'GBP' },
-                                    ]}
-                                />
-                            </div>
-
-                            {/* Quantity */}
-                            <Input
-                                id="quantity"
-                                label="Quantity"
-                                type="number"
-                                placeholder="1"
-                                value={formData.quantity}
-                                onChange={handleChange}
-                            />
-
-                            {/* End User Info */}
-                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
-                                <Input
-                                    id="endUserName"
-                                    label="End User / Company Name"
-                                    placeholder="e.g. Acme Corp"
-                                    value={formData.endUserName}
-                                    onChange={handleChange}
-                                    tooltip="Name of the party receiving the items. Used for denied party screening."
                                 />
                                 <Input
                                     id="endUserType"
@@ -266,129 +199,170 @@ const ComplianceForm = () => {
                                         { value: 'Commercial', label: 'Commercial' },
                                         { value: 'Government', label: 'Government' },
                                         { value: 'Individual', label: 'Individual' },
-                                        { value: 'Military', label: 'Military' },
-                                        { value: 'Academic', label: 'Academic/Research' }
+                                        { value: 'Military', label: 'Military' }
                                     ]}
                                 />
                             </div>
-                        </div>
 
-                        {/* Re-export Toggle */}
-                        <div className="mb-4" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1rem' }}>
-                            <input
-                                type="checkbox"
-                                id="reExport"
-                                checked={formData.reExport || false}
+                            <Input
+                                id="endUserName"
+                                label="End User Name"
+                                placeholder="For Denied Party Screening (Optional)"
+                                value={formData.endUserName}
                                 onChange={handleChange}
-                                style={{ width: 'auto', margin: 0, cursor: 'pointer' }}
+                                style={{ marginTop: '1rem' }}
                             />
-                            <label htmlFor="reExport" style={{ margin: 0, color: 'var(--text-primary)', cursor: 'pointer' }}>Re-export (Item will be shipped to another country)</label>
                         </div>
 
-                        {/* Product Description */}
-                        <Input
-                            id="description"
-                            label="Product Description / Commodity"
-                            type="textarea"
-                            placeholder="Briefly describe the item and its end use..."
-                            value={formData.description}
-                            onChange={handleChange}
-                        />
+                        {/* Section 2: Forced Labour */}
+                        <div style={{ marginBottom: '1.5rem' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', borderBottom: '1px solid #e2e8f0', paddingBottom: '0.5rem' }}>
+                                <h4 style={{ color: '#64748b', fontSize: '0.9rem', textTransform: 'uppercase', letterSpacing: '0.05em', margin: 0 }}>
+                                    Forced Labour Screening
+                                </h4>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                    <input
+                                        type="checkbox"
+                                        id="runLaborScreening"
+                                        checked={runLaborScreening}
+                                        onChange={(e) => setRunLaborScreening(e.target.checked)}
+                                        style={{ accentColor: '#2563eb', width: '16px', height: '16px' }}
+                                    />
+                                    <label htmlFor="runLaborScreening" style={{ fontSize: '0.9rem', color: '#475569', cursor: 'pointer', margin: 0 }}>Enable UFLPA Check</label>
+                                </div>
+                            </div>
 
-                        {/* Supplier */}
-                        <Input
-                            id="supplier"
-                            label="Supplier / Manufacturer"
-                            placeholder="e.g. Xinjiang Cotton Co."
-                            value={formData.supplier}
-                            onChange={handleChange}
-                            tooltip="Name of the entity supplying the goods. Critical for UFLPA screening."
-                        />
+                            {runLaborScreening ? (
+                                <>
+                                    <Input
+                                        id="supplier"
+                                        label="Supplier Name"
+                                        placeholder="e.g. Xinjiang Cotton Co"
+                                        value={formData.supplier}
+                                        onChange={handleChange}
+                                        required={runLaborScreening}
+                                        error={formErrors.supplier}
+                                    />
+                                    <Input
+                                        id="description"
+                                        label="Commodity / Description"
+                                        placeholder="Briefly describe item (e.g. Cotton Shirt)"
+                                        value={formData.description}
+                                        onChange={handleChange}
+                                        required={runLaborScreening}
+                                        error={formErrors.description}
+                                        type="textarea"
+                                    />
+                                </>
+                            ) : (
+                                <div style={{ padding: '1rem', backgroundColor: '#f8fafc', borderRadius: '6px', fontSize: '0.9rem', color: '#64748b', fontStyle: 'italic' }}>
+                                    Enable screening to check against UFLPA Entity List and high-risk commodities.
+                                </div>
+                            )}
+                        </div>
 
-                        <div className="mt-4 text-center" style={{ marginTop: '1.5rem', textAlign: 'center' }}>
-                            <Button type="submit" variant="primary" disabled={isLoading}>
-                                <Search size={18} /> {isLoading ? 'Evaluating...' : 'Evaluate Compliance'}
+                        <div className="mt-4 text-center">
+                            <Button type="submit" variant="primary" disabled={isLoading} style={{ width: '100%' }}>
+                                <Search size={18} /> {isLoading ? 'Running Compliance Engine...' : 'Evaluate Shipment'}
                             </Button>
                         </div>
                     </form>
                 </Card>
 
                 {/* Right Column: Results */}
-                {(results || dpsResult || error) && (
+                {(results || error) && (
                     <div id="results" style={{ marginBottom: '2rem' }}>
 
-                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem' }}>
-                            <h3 style={{ fontSize: '1.3rem', fontWeight: 'bold', margin: 0 }}>Compliance Results</h3>
-                            <Button
-                                variant="outline"
-                                icon={FileText}
-                                size="sm"
-                                onClick={() => setShowAuditLog(true)}
-                            >
-                                Audit Log
-                            </Button>
-                        </div>
-
-                        <DPSResultCard result={dpsResult} />
-                        <UFLPAResultCard result={uflpaResult} />
-
-                        {error && (
-                            <Card className="error-card" style={{ borderLeft: '4px solid var(--error-color)' }}>
-                                <div style={{ color: 'var(--error-color)' }}><strong>Error:</strong> {error}</div>
-                            </Card>
-                        )}
-
-                        {message && (
-                            <Card>
-                                <strong>{message}</strong>
-                            </Card>
-                        )}
-
-                        {/* Compliance Results - PRIMARY (show first) */}
-                        {results && <ExceptionSummary results={results} />}
-
-                        {/* Action Buttons - immediately after results */}
+                        {/* Summary Strip */}
                         {results && (
-                            <div style={{ display: 'flex', gap: '0.5rem', marginTop: '1rem', flexWrap: 'wrap' }}>
-                                <Button variant="primary" onClick={() => setShowReportDownload(true)}>
-                                    <FileText size={16} /> Download Report
-                                </Button>
-                                <Button variant="secondary" onClick={() => setShowAuditLog(true)}>
-                                    <History size={16} /> View Audit Log
-                                </Button>
+                            <div style={{
+                                backgroundColor: 'white',
+                                padding: '1rem',
+                                borderRadius: '8px',
+                                boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
+                                marginBottom: '1.5rem',
+                                display: 'flex',
+                                flexDirection: 'column',
+                                gap: '0.5rem',
+                                border: '1px solid #e2e8f0'
+                            }}>
+                                {/* License Summary Line */}
+                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                                    <span style={{ fontWeight: '600', color: '#334155' }}>License Status:</span>
+                                    {results.some(r => r.type === 'EXCEPTION') ? (
+                                        <span style={{ color: '#059669', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                            <div style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: '#059669' }}></div>
+                                            Exceptions Found ({results.filter(r => r.type === 'EXCEPTION').map(r => r.code).join(', ')})
+                                        </span>
+                                    ) : results.some(r => r.type === 'LICENSE_REQUIRED') ? (
+                                        <span style={{ color: '#dc2626', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                            <div style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: '#dc2626' }}></div>
+                                            LICENSE REQUIRED
+                                        </span>
+                                    ) : (
+                                        <span style={{ color: '#059669', fontWeight: 'bold' }}>NLR (No License Required)</span>
+                                    )}
+                                </div>
+
+                                {/* UFLPA Summary Line */}
+                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderTop: '1px solid #f1f5f9', paddingTop: '0.5rem' }}>
+                                    <span style={{ fontWeight: '600', color: '#334155' }}>Forced Labour Risk:</span>
+                                    {runLaborScreening && uflpaResult ? (
+                                        <span style={{
+                                            fontWeight: 'bold',
+                                            color: uflpaResult.risk_level === 'CLEAR' ? '#059669' : (uflpaResult.risk_level === 'WARNING' ? '#d97706' : '#dc2626'),
+                                            display: 'flex', alignItems: 'center', gap: '0.5rem'
+                                        }}>
+                                            <div style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: uflpaResult.risk_level === 'CLEAR' ? '#059669' : (uflpaResult.risk_level === 'WARNING' ? '#d97706' : '#dc2626') }}></div>
+                                            {uflpaResult.risk_level.replace('_', ' ')}
+                                        </span>
+                                    ) : (
+                                        <span style={{ color: '#94a3b8', fontStyle: 'italic' }}>Not Screened</span>
+                                    )}
+                                </div>
                             </div>
                         )}
 
-                        {/* Decision Trace - SECONDARY (collapsible below results) */}
+                        {/* License Results */}
+                        {results && <ExceptionSummary results={results} />}
+
+                        {/* UFLPA Card */}
+                        {runLaborScreening && uflpaResult && <UFLPAResultCard result={uflpaResult} />}
+                        {!runLaborScreening && (
+                            <div style={{ padding: '0.75rem', backgroundColor: '#f8fafc', borderRadius: '6px', border: '1px dashed #cbd5e1', color: '#64748b', fontSize: '0.9rem', marginBottom: '1.5rem', textAlign: 'center' }}>
+                                Forced Labour Screening was skipped for this shipment.
+                            </div>
+                        )}
+
+                        {/* DPS Card (if exists) */}
+                        {dpsResult && <DPSResultCard result={dpsResult} />}
+
+                        {/* Action Buttons */}
+                        <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1.5rem' }}>
+                            <Button variant="primary" onClick={() => setShowReportDownload(true)}>
+                                <FileText size={16} /> Download V2 Report
+                            </Button>
+                            <Button variant="secondary" onClick={() => setShowAuditLog(true)}>
+                                <History size={16} /> Audit Log
+                            </Button>
+                        </div>
+
+                        {/* Visualization */}
                         {trace && <DecisionVisualization trace={trace} collapsible={true} />}
 
-                        {/* AI Assistant inline */}
+                        {/* AI Insight */}
                         {aiSuggestion && <AIAssistant suggestion={aiSuggestion} />}
+
+                        {error && <div style={{ color: 'red', marginTop: '1rem' }}>{error}</div>}
                     </div>
                 )}
             </div>
 
-            {/* Chat Toggle Button */}
+            {/* Modals */}
             {!showChat && <ChatToggle onClick={() => setShowChat(true)} />}
-
-            {/* Chat Interface */}
-            {showChat && (
-                <ChatInterface
-                    formContext={formData}
-                    onClose={() => setShowChat(false)}
-                />
-            )}
-
-            {/* Audit Log Modal */}
+            {showChat && <ChatInterface formContext={formData} onClose={() => setShowChat(false)} />}
             {showAuditLog && <AuditLog onClose={() => setShowAuditLog(false)} />}
-
-            {/* Report Download Modal */}
-            {showReportDownload && (
-                <ReportDownload
-                    formData={formData}
-                    onClose={() => setShowReportDownload(false)}
-                />
-            )}
+            {showReportDownload && <ReportDownload formData={formData} onClose={() => setShowReportDownload(false)} />}
         </>
     );
 };

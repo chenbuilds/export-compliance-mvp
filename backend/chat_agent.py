@@ -5,6 +5,8 @@ Provides a ChatGPT-like experience for export compliance guidance.
 from datetime import datetime
 import json
 import uuid
+import os
+import google.generativeai as genai
 
 # In-memory conversation storage (per session)
 conversations = {}
@@ -82,6 +84,33 @@ YOUR RESPONSE:"""
     
     return prompt
 
+def get_chat_response(session_id, user_message, model, compliance_results=None):
+    """
+    Generate a response from the AI agent using the conversation history and context.
+    """
+    try:
+        # 1. Add user message to history
+        add_message(session_id, 'user', user_message)
+
+        # 2. Build Prompt
+        prompt = build_chat_prompt(session_id, user_message, compliance_results)
+
+        # 3. Call Gemini
+        if model:
+            response = model.generate_content(prompt)
+            ai_text = response.text.strip()
+        else:
+             ai_text = "I'm sorry, I can't connect to the AI service right now. Please check your API key."
+
+        # 4. Add AI response to history
+        add_message(session_id, 'assistant', ai_text)
+
+        return ai_text
+
+    except Exception as e:
+        print(f"Chat Error: {e}")
+        return "I encountered an error processing your request. Please try again."
+
 def log_audit_event(event_type, data, result=None, ai_suggestion=None):
     """Log an event to the audit log."""
     event = {
@@ -98,8 +127,3 @@ def log_audit_event(event_type, data, result=None, ai_suggestion=None):
 def get_audit_log(limit=50):
     """Get recent audit log entries."""
     return audit_log[-limit:]
-
-def clear_audit_log():
-    """Clear the audit log."""
-    global audit_log
-    audit_log = []

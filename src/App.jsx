@@ -1,22 +1,60 @@
-import React, { useState } from 'react';
-import Layout from './components/Layout';
-import ComplianceForm from './components/ComplianceForm';
+import React, { useState, useEffect } from 'react';
+import AgentConsole from './components/AgentConsole';
+import Dashboard from './components/Dashboard';
 
-function App() {
-  return (
-    <Layout>
-      <div style={{ textAlign: 'center', marginBottom: 'var(--spacing-xl)' }}>
-        <h1 style={{ fontSize: '2.5rem', fontWeight: 'bold', letterSpacing: '-0.025em', marginBottom: 'var(--spacing-md)' }}>
-          Export Compliance Assistant
-        </h1>
-        <p style={{ color: 'var(--text-secondary)', maxWidth: '600px', margin: '0 auto', fontSize: '1.1rem' }}>
-          Verify US export regulations, license exceptions (EAR/ITAR), and get agentic insights in seconds.
-        </p>
-      </div>
+class ErrorBoundary extends React.Component {
+    constructor(props) {
+        super(props);
+        this.state = { hasError: false };
+    }
 
-      <ComplianceForm />
-    </Layout>
-  );
+    static getDerivedStateFromError(error) {
+        return { hasError: true };
+    }
+
+    componentDidCatch(error, errorInfo) {
+        console.error("ErrorBoundary caught an error", error, errorInfo);
+    }
+
+    render() {
+        if (this.state.hasError) {
+            return (
+                <div className="flex flex-col items-center justify-center p-8 bg-red-50 rounded-lg border border-red-100 m-8">
+                    <h2 className="text-xl font-bold text-red-600 mb-2">Something went wrong.</h2>
+                    <p className="text-slate-600 mb-4">The application encountered an unexpected error.</p>
+                    <button
+                        onClick={() => window.location.reload()}
+                        className="px-4 py-2 bg-white border border-slate-300 rounded-md hover:bg-slate-50 text-sm font-medium"
+                    >
+                        Reload Page
+                    </button>
+                </div>
+            );
+        }
+
+        return this.props.children;
+    }
 }
+
+const App = () => {
+    // Basic Client-Side Routing
+    const path = window.location.pathname;
+    const isAdmin = path === '/admin';
+
+    // Disable default browser context menu for app-like feel (optional)
+    useEffect(() => {
+        const handleContext = (e) => {
+            // e.preventDefault(); 
+        };
+        window.addEventListener('contextmenu', handleContext);
+        return () => window.removeEventListener('contextmenu', handleContext);
+    }, []);
+
+    return (
+        <ErrorBoundary>
+            {isAdmin ? <Dashboard /> : <AgentConsole />}
+        </ErrorBoundary>
+    );
+};
 
 export default App;

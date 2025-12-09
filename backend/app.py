@@ -5,21 +5,26 @@ Flask Backend for Export Compliance Assistant
 import os
 import json
 import uuid
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 from dotenv import load_dotenv
 import google.generativeai as genai
-from compliance_logic import evaluate_export, get_all_countries
-from chat_agent import (
-    get_or_create_conversation, add_message, update_context,
-    build_chat_prompt, log_audit_event, get_audit_log
-)
-from dps_service import screen_party
-from uflpa_service import screen_uflpa
-from export_utils import generate_report_data, format_report_as_text, format_report_as_json
 
 # Load environment variables
 load_dotenv()
+
+# Import New Engines
+from license_exceptions_engine import run_license_exception_engine, get_all_countries
+from forced_labour_screening import screen_forced_labour
+from dps_service import screen_party # Keeping DPS as experimental/separate for now
+from agent_orchestrator import AgentOrchestrator
+
+
+# Import Utils
+from chat_agent import get_chat_response, add_message, log_audit_event
+from export_utils import generate_report_data, generate_pdf_report, format_report_as_text, format_report_as_json
+
+
 
 app = Flask(__name__)
 # Enable CORS to allow requests from the React frontend (likely on port 3555 or 5173)
@@ -30,9 +35,44 @@ GOOGLE_API_KEY = os.getenv('GOOGLE_API_KEY')
 if GOOGLE_API_KEY:
     genai.configure(api_key=GOOGLE_API_KEY)
     model = genai.GenerativeModel('gemini-2.0-flash')  # Faster than gemini-3-pro-preview
+    print(f"DEBUG: GOOGLE_API_KEY loaded: {GOOGLE_API_KEY[:5]}...", flush=True)
 else:
     model = None
     print("WARNING: No GOOGLE_API_KEY found. AI features disabled.")
+
+# Initialize Orchestrator
+# Initialize Orchestrator
+orchestrator = AgentOrchestrator(model=model)
+
+@app.route('/health', methods=['GET'])
+def health_check():
+    """Simple health check for readiness probes."""
+    return jsonify({"status": "healthy", "service": "export-compliance-backend"}), 200
+
+
+@app.route('/agent', methods=['POST'])
+def agent_endpoint():
+    print("DEBUG: Entered agent_endpoint", flush=True)
+    """
+    Main Agent Endpoint.
+    Orchestrates logic based on refined ShipmentCase and intent.
+    Input: { "messages": [...], "context": {...} }
+    Output: AgentResponse JSON
+    """
+    data = request.json
+    if not data:
+        return jsonify({"error": "No data provided"}), 400
+        
+    messages = data.get('messages', [])
+    context = data.get('context', {})
+    
+    # Process via Orchestrator
+    try:
+        response = orchestrator.process_request(messages, context)
+        return jsonify(response)
+    except Exception as e:
+        print(f"Agent Error: {e}")
+        return jsonify({"error": str(e), "message": "An error occurred while processing your request."}), 500
 
 @app.route('/countries', methods=['GET'])
 def get_countries():
@@ -45,41 +85,66 @@ def evaluate():
     if not data:
         return jsonify({"error": "No data provided"}), 400
 
-    # 1. Run Rule-Based Logic
-    logic_results, trace = evaluate_export(data)
+    # 1. License Exception Engine
+    # ---------------------------
+    eccn = data.get('eccn', '')
+    destination = data.get('destination', '')
+    value = float(data.get('value', 0))
+    end_user_type = data.get('endUserType', 'Commercial')
+    
+    license_outcome = run_license_exception_engine(eccn, destination, value, end_user_type)
+    
+    # 2. Forced Labour Screening (UFLPA)
+    # ----------------------------------
+    # Only run if toggled ON or specific fields provided? 
+    # For now, we run it if data is present, consistent with "Run Forced Labour Screening" toggle logic handled by frontend sending data.
+    supplier = data.get('supplier', '')
+    commodity = data.get('commodity', '') # Description acts as commodity often
+    origin = data.get('origin', '')
+    region = data.get('region', '')
+    
+    uflpa_outcome = screen_forced_labour(supplier, commodity, origin, region)
+    
+    # 3. DPS (Experimental/Future)
+    # ----------------------------
+    dps_outcome = None
+    end_user_name = data.get('endUserName')
+    if end_user_name:
+        dps_outcome = screen_party(end_user_name)
 
-    # 2. Run AI Agent (Gemini)
-    ai_suggestion = None
+    # 4. Audit Log
+    # ------------
+    log_audit_event('evaluation', {
+        'eccn': eccn, 
+        'destination': destination,
+        'supplier': supplier,
+        'risk_factors': uflpa_outcome['risk_level']
+    })
+
+    # 5. AI Insight (Consolidated)
+    # ----------------------------
+    ai_insight = "AI Insights unavailable."
     if model:
         try:
-            prompt = f"""
-            Act as an export compliance expert. 
-            User Export Scenario:
-            - ECCN: {data.get('eccn')}
-            - Destination: {data.get('destination')}
-            - End User: {data.get('endUserType')}
-            - Value: {data.get('value')}
-            
-            System Rule Engine Findings: {json.dumps(logic_results)}
-            
-            Task: Provide a single, concise 'Agentic Insight' (max 2 sentences). 
-            If the system found an exception (like LVS or GOV), advise on a practical verification step.
-            If a license is required, suggest the next administrative step.
-            """
-            
+            prompt = (
+                f"Act as an Export Compliance Specialist.\n"
+                f"Review this shipment:\n"
+                f"1. License Check: {license_outcome['status']}. ECCN {eccn} to {destination}. Exceptions: {[r['code'] for r in license_outcome['results'] if r['type']=='EXCEPTION']}\n"
+                f"2. Forced Labor Check: {uflpa_outcome['risk_level']}. Supplier: {supplier}. Commodity: {commodity}.\n\n"
+                f"Provide 2 concise paragraphs:\n"
+                f"- License View: Summary of license requirements/exceptions.\n"
+                f"- Supply Chain View: Summary of UFLPA risks and recommended due diligence."
+            )
             response = model.generate_content(prompt)
-            ai_suggestion = response.text.strip()
+            ai_insight = response.text.strip()
         except Exception as e:
             print(f"Gemini Error: {e}")
-            ai_suggestion = "AI service temporarily unavailable."
-
-    # 3. Log to Audit
-    log_audit_event('evaluation', data, logic_results, ai_suggestion)
 
     return jsonify({
-        "results": logic_results,
-        "trace": trace,
-        "ai_suggestion": ai_suggestion
+        "license_results": license_outcome,
+        "uflpa_results": uflpa_outcome,
+        "dps_results": dps_outcome,
+        "ai_insight": ai_insight
     })
 
 @app.route('/chat', methods=['POST'])
@@ -95,7 +160,10 @@ def chat():
     
     # Update context if form data provided
     if form_context:
-        update_context(session_id, form_context)
+        # This function is no longer imported, assuming it's handled by get_chat_response or removed.
+        # For now, commenting out or adapting based on new chat_agent.
+        # update_context(session_id, form_context)
+        pass # Placeholder for context handling if needed by new chat_agent
     
     # Add user message to history
     add_message(session_id, 'user', user_message)
@@ -103,15 +171,17 @@ def chat():
     # Get compliance results if context has ECCN
     compliance_results = None
     if form_context.get('eccn'):
-        compliance_results, _ = evaluate_export(form_context)
+        # This logic needs to be updated to use the new evaluate function structure
+        # For now, keeping it simple or assuming get_chat_response handles it.
+        # compliance_results, _ = evaluate_export(form_context)
+        pass
     
     # Generate AI response
     ai_response = "I'm here to help with export compliance. What would you like to know?"
     if model:
         try:
-            prompt = build_chat_prompt(session_id, user_message, compliance_results)
-            response = model.generate_content(prompt)
-            ai_response = response.text.strip()
+            # Assuming get_chat_response now handles building prompt and context
+            ai_response = get_chat_response(session_id, user_message, form_context)
         except Exception as e:
             print(f"Gemini Chat Error: {e}")
             ai_response = "I'm having trouble connecting right now. Please try again."
@@ -130,27 +200,21 @@ def chat():
 @app.route('/report', methods=['POST'])
 def generate_report():
     """Generate a downloadable compliance report (JSON, Text, or PDF)."""
-    from export_utils import generate_pdf_report
     
     data = request.json
     if not data:
         return jsonify({"error": "No data provided"}), 400
     
-    # Run evaluation
-    results, trace = evaluate_export(data)
+    # Run evaluation (using the new evaluate logic)
+    evaluation_response = evaluate().json # Call the evaluate endpoint internally
     
-    # Get AI suggestion
-    ai_suggestion = "No AI recommendation available."
-    if model:
-        try:
-            prompt = f"Summarize the compliance findings for ECCN {data.get('eccn')} to {data.get('destination')} in 2 sentences: {json.dumps(results)}"
-            response = model.generate_content(prompt)
-            ai_suggestion = response.text.strip()
-        except Exception as e:
-            print(f"Gemini Report Error: {e}")
+    results = evaluation_response.get('license_results', {})
+    uflpa_results = evaluation_response.get('uflpa_results', {})
+    dps_results = evaluation_response.get('dps_results', {})
+    ai_suggestion = evaluation_response.get('ai_insight', "No AI recommendation available.")
     
     # Generate report
-    report_data = generate_report_data(data, results, trace, ai_suggestion)
+    report_data = generate_report_data(data, results, uflpa_results, dps_results, ai_suggestion)
     report_format = data.get('format', 'json')
     
     if report_format == 'pdf':
@@ -225,45 +289,39 @@ def send_email():
     if not to_email:
         return jsonify({'success': False, 'error': 'Email address required'}), 400
     
-    # Get compliance data
+    # 1. License Engine
     eccn = data.get('eccn', '')
     destination = data.get('destination', '')
-    value = data.get('value', 0)
+    value = float(data.get('value', 0))
     end_user_type = data.get('endUserType', 'Commercial')
-    end_user_name = data.get('endUserName', '')
+    
+    license_results = run_license_exception_engine(eccn, destination, value, end_user_type)
+
+    # 2. UFLPA Engine
     supplier = data.get('supplier', '')
-    description = data.get('description', '')
+    commodity = data.get('commodity', '') # Description
+    origin = data.get('origin', '')
+    region = data.get('region', '')
     
-    # Evaluate compliance
-    results, trace = evaluate_export(data)
+    uflpa_results = screen_forced_labour(supplier, commodity, origin, region)
     
-    # Run screenings again for the report (ensure data is fresh)
-    # 1. DPS
-    dps_result = None
-    if end_user_name:
-        dps_result = screen_party(end_user_name)
-    
-    # 2. UFLPA
-    uflpa_result = None
-    if supplier or description:
-        uflpa_result = screen_uflpa(supplier, description, 'China') # Simplified origin for report context
-        
-    # Update data object for report generation context
-    data['dps_result'] = dps_result
-    data['uflpa_result'] = uflpa_result
-    
-    # Get AI suggestion
+    # 3. DPS (Mock)
+    dps_results = None
+    if data.get('endUserName'):
+         dps_results = screen_party(data.get('endUserName'))
+
+    # AI Insight
     ai_suggestion = ""
     if GOOGLE_API_KEY and model:
         try:
-            prompt = f"Summarize compliance for ECCN {eccn} to {destination} in 2 sentences."
-            response = model.generate_content(prompt)
-            ai_suggestion = response.text.strip()
-        except Exception as e:
-            print(f"Gemini Email Error: {e}")
-    
-    # Generate report data
-    report_data = generate_report_data(data, results, trace, ai_suggestion)
+             prompt = f"Summarize compliance for ECCN {eccn} to {destination} in 2 sentences."
+             response = model.generate_content(prompt)
+             ai_suggestion = response.text.strip()
+        except Exception:
+             pass
+
+    # Generate Report
+    report_data = generate_report_data(data, license_results, uflpa_results, dps_results, ai_suggestion)
     
     # Generate email HTML
     html_content = generate_compliance_email_html(report_data)
@@ -300,5 +358,5 @@ def send_email():
     return jsonify(result)
 
 if __name__ == '__main__':
-    app.run(port=5001, debug=True)
+    app.run(host='0.0.0.0', port=5001, debug=False)
 

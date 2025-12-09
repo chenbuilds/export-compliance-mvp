@@ -306,7 +306,7 @@ const ExceptionSummary = ({ results }) => {
             </div>
 
             {/* Exception Cards (Accordion) */}
-            <div style={{ maxHeight: '500px', overflowY: 'auto', paddingRight: '4px' }}>
+            <div style={{ paddingRight: '4px' }}>
                 {filteredResults.map((result, index) => (
                     <ExceptionCard
                         key={index}

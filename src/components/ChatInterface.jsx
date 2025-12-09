@@ -1,6 +1,8 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Send, Bot, User, X, MessageCircle, Loader2, Shield, Lock, FileText, CheckCircle, ChevronDown, ChevronUp, Sparkles } from 'lucide-react';
 import { API_URL } from '../config/api';
+// Import Agent Client
+import { runAgentChat } from '../api/agentClient';
 
 /**
  * ChatInterface - Enhanced ChatGPT-like multi-turn conversation component
@@ -31,6 +33,7 @@ const ChatInterface = ({ formContext, onClose }) => {
         setExpandedMessages(prev => ({ ...prev, [idx]: !prev[idx] }));
     };
 
+
     const sendMessage = async () => {
         if (!input.trim() || isLoading) return;
 
@@ -40,21 +43,21 @@ const ChatInterface = ({ formContext, onClose }) => {
         setIsLoading(true);
 
         try {
-            const response = await fetch(`${API_URL}/chat`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    session_id: sessionId,
-                    message: userMessage,
-                    context: formContext || {}
-                })
-            });
+            // Updated to use Agent Client
+            // We pass the full message history (updated locally first)
+            const currentHistory = [...messages, { role: 'user', content: userMessage }];
 
-            const data = await response.json();
-            setSessionId(data.session_id);
+            // Map history to {role, content} only (remove 'type' extra fields)
+            const historyPayload = currentHistory.map(m => ({
+                role: m.role,
+                content: m.content
+            }));
+
+            const agentResponse = await runAgentChat(historyPayload, formContext || {});
+
             setMessages(prev => [...prev, {
                 role: 'assistant',
-                content: data.response,
+                content: agentResponse.message, // Agent returns 'message'
                 type: 'insight'
             }]);
         } catch (error) {
