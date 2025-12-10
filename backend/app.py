@@ -181,7 +181,11 @@ def chat():
     if model:
         try:
             # Assuming get_chat_response now handles building prompt and context
-            ai_response = get_chat_response(session_id, user_message, form_context)
+            # Fix: Pass 'model' as 3rd arg, and form_context/results as 4th?
+            # Actually chat_agent.py expects (session_id, user_message, model, compliance_results)
+            # We treat form_context as compliance_results/context for now?
+            # Actually update_context should be called first if we want context.
+            ai_response = get_chat_response(session_id, user_message, model, form_context)
         except Exception as e:
             print(f"Gemini Chat Error: {e}")
             ai_response = "I'm having trouble connecting right now. Please try again."
