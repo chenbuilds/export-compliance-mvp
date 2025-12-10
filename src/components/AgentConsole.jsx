@@ -89,7 +89,12 @@ const AgentConsole = () => {
             }
         } catch (error) {
             console.error("Agent Error:", error);
-            setMessages(prev => [...prev, { role: 'assistant', kind: 'text', content: "I encountered an error connecting to the decision engine. Please try again." }]);
+            const isProd = window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1';
+            const errorMsg = isProd
+                ? "I couldn't connect to the backend. If you are on Vercel, please check that 'VITE_API_BASE_URL' is set to your deployed backend URL (Render/Railway)."
+                : "I encountered an error connecting to the decision engine. Is the backend running on port 5001?";
+
+            setMessages(prev => [...prev, { role: 'assistant', kind: 'text', content: errorMsg }]);
             setMood('tired');
         } finally {
             setLoading(false);
