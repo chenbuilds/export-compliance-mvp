@@ -44,10 +44,23 @@ const ActionButtons = ({ data, context }) => {
             });
 
             if (res.ok) {
+                if (action.type === 'pdf') {
+                    // Handle PDF Download
+                    const blob = await res.blob();
+                    const url = window.URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = `compliance_report_${Date.now()}.pdf`;
+                    document.body.appendChild(a);
+                    a.click();
+                    window.URL.revokeObjectURL(url);
+                    document.body.removeChild(a);
+                }
+
                 setStatus('sent');
                 setTimeout(() => setStatus(null), 3000);
             } else {
-                alert("Failed to perform action.");
+                alert("Failed to perform action. Server returned error.");
             }
         } catch (e) {
             console.error(e);

@@ -16,7 +16,7 @@ const ExceptionCard = ({ ex }) => {
                     </div>
                     <div className="flex flex-col">
                         <span className="text-xs text-slate-400 font-semibold uppercase tracking-wider line-clamp-1">{ex.title || "License Exception"}</span>
-                        {!expanded && <p className="text-sm font-medium text-slate-700 line-clamp-1">{ex.description || "View exceptions details..."}</p>}
+                        {!expanded && <p className="text-sm font-medium text-slate-700 line-clamp-1">{ex.description || ex.justification || "View exceptions details..."}</p>}
                     </div>
                 </div>
                 <div className="flex items-center gap-2">
@@ -27,7 +27,7 @@ const ExceptionCard = ({ ex }) => {
 
             {expanded && (
                 <div className="px-4 pb-4 pt-2 space-y-3 animate-fade-in border-t border-slate-100">
-                    <p className="text-sm text-slate-600 leading-relaxed font-medium">{ex.description}</p>
+                    <p className="text-sm text-slate-600 leading-relaxed font-medium">{ex.description || ex.justification}</p>
 
                     <div className="bg-slate-50 rounded-lg p-3 border border-slate-100">
                         <h5 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">Requirements</h5>
